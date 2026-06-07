@@ -1,0 +1,49 @@
+# Data
+pandas
+numpy
+tqdm
+
+# YouTube scraping
+google-api-python-client
+python-dotenv
+
+# NLP - core
+nltk
+spacy
+vaderSentiment
+
+# NLP - transformers
+transformers
+torch
+sentence-transformers
+
+# NLP - keywords + topics
+keybert
+yake
+bertopic
+umap-learn
+hdbscan
+
+# RAG - vector store
+chromadb
+
+# RAG - lexical search
+rank-bm25
+
+# RAG - reranking
+# cross-encoder is part of sentence-transformers
+
+# LLM
+openai
+
+# Evaluation
+rouge-score
+bert-score
+mlflow
+
+# Dashboard
+streamlit
+plotly
+
+# Testing
+pytest
