@@ -272,16 +272,6 @@ streamlit run app/dashboard.py
 
 ---
 
-## Team Contribution
-
-Each member independently collects 10,000 comments.
-
-| Member | File | Scope |
-|---|---|---|
-| Member A | `member_a_10k.csv` | Recent videos |
-| Member B | `member_b_10k.csv` | Most viewed videos |
-| Member C | `member_c_10k.csv` | Viral/trending videos |
-
 Commit regularly with descriptive messages:
 - `data: member_a collects 10k from recent videos`
 - `nlp: add RoBERTa sentiment to enriched dataset`
