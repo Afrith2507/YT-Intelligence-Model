@@ -1,0 +1,152 @@
+# YouTube Comment Scraper (Ryan Trahan Dataset)
+
+## Overview
+
+This project is a Python-based YouTube comment scraper that collects top-level comments from videos in a single YouTube channel (default: Ryan Trahan) using the YouTube Data API v3.
+
+The scraper is designed to introduce controlled randomness in video and comment selection so that each run produces a slightly different dataset while remaining focused on the same channel.
+
+It outputs structured CSV files for use in data analysis, machine learning, and natural language processing tasks.
+
+---
+
+## Features
+
+- Scrapes YouTube comments using the official YouTube Data API v3
+- Targets a single channel (default: Ryan Trahan)
+- Randomized video selection order per run
+- Randomized comment ordering per video
+- Automatic CSV output generation per run (no overwriting)
+- Built-in duplicate removal within each run
+- Lightweight and easy to run locally
+
+---
+
+## Requirements
+
+- Python 3.9 or higher
+- YouTube Data API v3 key
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd youtube_scraper
+2. Install dependencies
+pip install pandas python-dotenv google-api-python-client
+3. Create environment file
+
+Create a .env file in the root directory:
+
+touch .env
+
+Add your API key inside:
+
+YOUTUBE_API_KEY=YOUR_API_KEY_HERE
+
+Important:
+
+Do not use quotes
+Do not add spaces around the equal sign
+Project Structure
+youtube_scraper/
+├── scraper.py
+├── .env
+├── data/
+│   └── raw/
+└── README.md
+How to Run
+
+Run the scraper using:
+
+python3 scraper.py
+Output
+
+Each run generates a new CSV file inside:
+
+data/raw/
+
+Example filenames:
+
+ryan_trahan_comments_run_01.csv
+ryan_trahan_comments_run_02.csv
+ryan_trahan_comments_run_03.csv
+
+Each file represents a separate dataset run and will not overwrite previous outputs.
+
+How Randomness Works
+
+The scraper introduces controlled randomness in two ways:
+
+Video Selection
+Videos are fetched from the channel uploads
+The list of videos is shuffled before processing
+Comment Selection
+Each video randomly uses either relevance-based or time-based ordering
+Final collected comments are shuffled before saving
+
+This ensures variation between runs while still remaining within the same channel scope.
+
+Configuration
+
+You can adjust scraping behavior inside the script:
+
+Default settings
+Maximum videos: 30
+Maximum comments per video: 250
+Example custom run
+python3 scraper.py --max-videos 60 --max-comments-per-video 300
+
+This increases dataset size per run.
+
+Common Issues
+Missing API key
+
+Ensure .env exists and contains:
+
+YOUTUBE_API_KEY=your_api_key_here
+No output file generated
+
+Possible causes:
+
+YouTube API quota exceeded
+Network or API errors
+No accessible videos or comments
+Similar results across runs
+
+This is expected behavior because:
+
+The same channel is used
+The same video pool is sampled
+Randomness is controlled, not fully random
+Notes
+Only works with YouTube Data API v3
+Some videos may have disabled comments and will be skipped automatically
+API quota limits apply based on Google Cloud settings
+Recommended Usage
+
+For best dataset size and diversity:
+
+python3 scraper.py --max-videos 60 --max-comments-per-video 300
+
+This typically produces between 10,000 and 18,000 comments per run depending on video availability.
+
+Future Improvements
+Cross-run deduplication using persistent storage
+Multi-channel scraping support
+Sentiment-balanced sampling
+Database integration (SQLite or PostgreSQL)
+Parallel API request optimization
+
+---
+
+If you want, I can next help you:
+- :contentReference[oaicite:0]{index=0}
+- or :contentReference[oaicite:1]{index=1}
+- or :contentReference[oaicite:2]{index=2}
+
+Just tell me.
