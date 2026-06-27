@@ -52,33 +52,99 @@ topics:
   output_column: "topic_id"
   sentiments_to_model: ["positive", "negative", "neutral"]
 
-rag:
-  chunk_strategy: "comment"
-  embedding_model: "all-MiniLM-L6-v2"
-  chroma_dir: "data/vectorstore"
-  collection_name: "ryan_trahan_comments"
+# ── RAG pipeline (aligned with professor's W8L7 lecture code) ─────────────
+chunking:
+  # Strategy 1: sliding window (RecursiveCharacterTextSplitter - from 2_Chunking.py)
+  sliding_window:
+    chunk_size: 300
+    chunk_overlap: 60           # ~20% overlap as professor recommended
+    separators: ["\n\n", "\n", " ", ""]
+
+  # Strategy 2: propositional chunking (prefix topic context - from 2_Chunking.py)
+  propositional:
+    prefix_template: "Ryan Trahan YouTube comment, {sentiment}, topic: {topic}. "
+
+  # Strategy 3: structured chunking (keep metadata per chunk - from 2_Chunking.py)
+  structured:
+    metadata_fields: ["video_id", "video_title", "sentiment", "topic_id", "published_at", "like_count"]
+
+  default_strategy: "propositional"   # best for this dataset
+
+embedding:
+  # Professor uses OllamaEmbeddings(model="embeddinggemma") from 3_Embedding.py
+  # For project we support both Ollama (local) and sentence-transformers (cloud)
+  provider: "sentence-transformers"   # switch to "ollama" if Ollama is running locally
+  ollama_model: "embeddinggemma"
+  st_model: "all-MiniLM-L6-v2"
+  ollama_base_url: "http://localhost:11434"
+
+vectorstore:
+  # Professor uses FAISS (4_Vectorization_FAISS.py) as primary
+  # and Weaviate (4_Vectorization_Weaviate.py) as alternative
+  provider: "faiss"                   # options: "faiss", "weaviate"
+  faiss_dir: "data/vectorstore/faiss_store"
+
+  # Weaviate config (only used if provider = "weaviate")
+  weaviate_url: "http://localhost:8080"
+  weaviate_collection: "RyanTrahanComments"
+  weaviate_hnsw_ef: 128
+  weaviate_hnsw_ef_construction: 128
+  weaviate_hnsw_max_connections: 64
+  weaviate_bm25_k1: 1.2
+  weaviate_bm25_b: 0.75
+
+retrieval:
   top_k_retrieve: 20
   top_k_rerank: 5
-  retrieval_modes: ["semantic", "bm25", "hybrid"]
-  hybrid_alpha: 0.5
-  reranker_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+  # Retrieval modes (from 5_Retrieval.py)
+  # semantic  → near_vector search (Weaviate) or similarity_search (FAISS)
+  # mmr       → vectorstore.as_retriever(search_type="mmr") - professor's Task 5
+  # hybrid    → BM25 + semantic combined - professor's Task 6
+  # hyde      → Hypothetical Document Embedding - professor's HyDE function
+  # multihop  → iterative query expansion - professor's Task 7
+  modes: ["semantic", "mmr", "hybrid", "hyde"]
+  default_mode: "hybrid"
+
+  mmr_lambda: 0.3                     # 30% diversity, 70% relevance (professor's value)
+  mmr_fetch_k: 20
+  hybrid_alpha: 0.5                   # balance semantic vs BM25
+
+  hyde_n_docs: 1                      # number of hypothetical docs to generate
+
+reranker:
+  # CrossEncoder from sentence_transformers - used in professor's reRankCrossEncoder()
+  model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  top_k: 5
+
+# ── LLM generation (professor uses DSPy - from 7_Generator.py) ────────────
 llm:
-  provider: "openai"
-  model: "gpt-4o-mini"
-  temperature: 0.2
+  # Professor uses dspy.LM with Ollama backend
+  # For project we support both Ollama (local) and OpenAI (cloud)
+  provider: "openai"                  # options: "openai", "ollama"
+  openai_model: "gpt-4o-mini"
+  ollama_model: "ollama/llama3.2:3b"
+  ollama_base_url: "http://localhost:11434"
+  temperature: 0.9                    # professor's value
   max_tokens: 512
+
+  # DSPy signature classes to implement (from 7_Generator.py)
+  # getAnswer(question, context) -> answer
+  # getHyDE(question) -> answer  (for HyDE retrieval)
 
 agent:
   intent_classes: ["qa", "summarize", "sentiment_insight", "topic_insight", "entity_insight"]
   default_retrieval_mode: "hybrid"
   max_tool_calls: 3
 
+# ── Evaluation + MLflow (professor's Task 10 from 7_Generator.py) ─────────
 evaluation:
   test_queries_file: "data/eval/test_queries.json"
   retrieval_k_values: [1, 3, 5, 10]
   mlflow_experiment_name: "csci370-youtube-intelligence"
   mlflow_tracking_uri: "mlruns"
+  # professor explicitly shows: mlflow.dspy.autolog() and mlflow.openai.autolog()
+  mlflow_autolog_backend: "dspy"      # options: "dspy", "openai", "langchain"
 
 dashboard:
   title: "Ryan Trahan YouTube Intelligence Engine"

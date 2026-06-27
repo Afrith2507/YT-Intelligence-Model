@@ -1,49 +1,55 @@
-# Data
+# ── Data ──────────────────────────────────────────────────────────────────
 pandas
 numpy
 tqdm
 
-# YouTube scraping
+# ── YouTube scraping ───────────────────────────────────────────────────────
 google-api-python-client
 python-dotenv
 
-# NLP - core
+# ── NLP - core ────────────────────────────────────────────────────────────
 nltk
 spacy
 vaderSentiment
 
-# NLP - transformers
+# ── NLP - transformers ────────────────────────────────────────────────────
 transformers
 torch
-sentence-transformers
+sentence-transformers          # also provides CrossEncoder for reranking
 
-# NLP - keywords + topics
+# ── NLP - keywords + topics ───────────────────────────────────────────────
 keybert
 yake
 bertopic
 umap-learn
 hdbscan
 
-# RAG - vector store
-chromadb
+# ── RAG - chunking (professor uses LangChain text splitters) ──────────────
+langchain
+langchain-community
+langchain-text-splitters
+langchain-ollama               # OllamaEmbeddings used in class
+langchain-huggingface          # HuggingFaceEmbeddings for sentence-transformers
 
-# RAG - lexical search
+# ── RAG - vector stores ───────────────────────────────────────────────────
+faiss-cpu                      # professor's primary vector store
+weaviate-client                # professor's second vector store option
+
+# ── RAG - lexical search ──────────────────────────────────────────────────
 rank-bm25
 
-# RAG - reranking
-# cross-encoder is part of sentence-transformers
+# ── RAG - generation (professor uses DSPy) ────────────────────────────────
+dspy-ai
+openai                         # DSPy backend (OpenAI or Ollama)
 
-# LLM
-openai
-
-# Evaluation
+# ── Evaluation + monitoring ───────────────────────────────────────────────
 rouge-score
 bert-score
-mlflow
+mlflow                         # professor explicitly requires this (Task 10)
 
-# Dashboard
+# ── Dashboard ─────────────────────────────────────────────────────────────
 streamlit
 plotly
 
-# Testing
+# ── Testing ───────────────────────────────────────────────────────────────
 pytest

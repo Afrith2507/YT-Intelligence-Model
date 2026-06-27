@@ -83,6 +83,24 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="Sleep between API requests to avoid aggressive rate bursts.",
     )
+    parser.add_argument(
+        "--exclude-ids-from",
+        type=str,
+        default=None,
+        help="Path to existing CSV. Any comment_id already in this file will be skipped.",
+    )
+    parser.add_argument(
+        "--video-order",
+        choices=["date", "viewCount", "rating", "relevance"],
+        default="date",
+        help="Order to fetch videos from channel (standard mode only).",
+    )
+    parser.add_argument(
+        "--target-new-comments",
+        type=int,
+        default=None,
+        help="Stop collecting once this many NEW (non-excluded) comments are gathered.",
+    )
     return parser.parse_args()
 
 
@@ -139,7 +157,7 @@ def fetch_videos_for_scan(
                 part="id,snippet",
                 channelId=channel_id,
                 type="video",
-                order="date",
+                order=source if source not in ("uploads-playlist",) else "date",
                 maxResults=min(50, max_videos - len(videos)),
                 pageToken=page_token,
             )
@@ -320,6 +338,7 @@ def fetch_comments_for_video(
             text = top_comment.get("textDisplay") or top_comment.get("textOriginal") or ""
 
             if not comment_id or not text.strip():
+
                 continue
 
             rows.append(
@@ -348,10 +367,25 @@ def fetch_comments_for_video(
     return rows
 
 
+def load_existing_ids(path_str: str) -> set:
+    path = Path(path_str)
+    if not path.is_absolute():
+        project_root = Path(__file__).resolve().parents[1]
+        path = project_root / path
+    if not path.exists():
+        print(f"Warning: --exclude-ids-from file not found at {path}. Skipping exclusion.")
+        return set()
+    df = pd.read_csv(path, usecols=lambda c: c in ("comment_id", "id"))
+    id_col = "comment_id" if "comment_id" in df.columns else "id"
+    ids = set(df[id_col].dropna().astype(str).tolist())
+    print(f"Loaded {len(ids)} existing comment IDs to exclude from {path.name}.")
+    return ids
+
+
 def resolve_output_path(output_arg: str) -> Path:
     output_path = Path(output_arg)
     if output_path.is_absolute():
-        return output_path
+        return output_path  
 
     project_root = Path(__file__).resolve().parents[1]
     return project_root / output_path
@@ -370,6 +404,11 @@ def main() -> None:
             )
 
     print(f"Using channel ID: {channel_id}")
+
+    existing_ids: set = set()
+    if args.exclude_ids_from:
+        existing_ids = load_existing_ids(args.exclude_ids_from)
+
     all_rows: List[Dict[str, str]] = []
 
     if args.mode == "single-ranked-video":
@@ -416,23 +455,33 @@ def main() -> None:
             f"(target was {args.single_video_comment_target})."
         )
     else:
-        videos = fetch_channel_videos(
+        videos = fetch_videos_for_scan(
             youtube=youtube,
             channel_id=channel_id,
             max_videos=args.max_videos,
             sleep_seconds=args.sleep_seconds,
+            source=args.video_order,
         )
         print(f"Collected {len(videos)} videos.")
 
+        target = args.target_new_comments
+        new_count = 0
+
         for idx, video in enumerate(videos, start=1):
-            print(f"[{idx}/{len(videos)}] Fetching comments for video: {video['video_title']}")
+            if target and new_count >= target:
+                print(f"Reached target of {target} new comments. Stopping early.")
+                break
+            print(f"[{idx}/{len(videos)}] Fetching: {video['video_title']}")
             rows = fetch_comments_for_video(
                 youtube=youtube,
                 video_meta=video,
                 max_comments_per_video=args.max_comments_per_video,
                 sleep_seconds=args.sleep_seconds,
             )
-            all_rows.extend(rows)
+            new_rows = [r for r in rows if str(r["comment_id"]) not in existing_ids]
+            all_rows.extend(new_rows)
+            new_count += len(new_rows)
+            print(f"  → {len(new_rows)} new comments (total new so far: {new_count})")
 
     if not all_rows:
         raise RuntimeError("No comments were collected. Check channel/videos/API quota.")
@@ -442,7 +491,6 @@ def main() -> None:
     df["text"] = df["text"].astype(str).str.strip()
     df = df[df["text"] != ""].copy()
     df = df.drop_duplicates(subset=["comment_id"]).reset_index(drop=True)
-
     output_path = resolve_output_path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False, encoding="utf-8")
