@@ -120,7 +120,7 @@ def _load(path=DEFAULT_DATA_PATH, df=None):
 # --------------------------------------------------------------------------
 # qa
 # --------------------------------------------------------------------------
-def qa_tool(query, k=4, retrieval="mmr", path=DEFAULT_DATA_PATH):
+def qa_tool(query, k=4, retrieval="hybrid", path=DEFAULT_DATA_PATH):
     result = answer_with_context(query, k=k, retrieval=retrieval, path=path)
     return {
         "intent": "qa",

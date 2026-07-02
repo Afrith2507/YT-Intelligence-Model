@@ -18,15 +18,15 @@ import dspy
 
 
 class getAnswer(dspy.Signature):
-    """You are analyzing YouTube comments. Answer the question by summarizing
-    what the comment authors say. Read the question carefully — if it asks what
-    VIEWERS or PEOPLE think, report their opinions from the comments, do NOT
-    describe what Ryan himself thinks. Use only information explicitly present
-    in the provided comments. Be direct and specific."""
+    """You are a YouTube audience analyst. Answer in 2-3 sentences using ONLY
+    information from the provided comments. Reuse names and key phrases from
+    the comments (e.g. "funny", "beautiful", "so good"). Describe the overall
+    sentiment and themes viewers express. Do not invent jobs, skills, traits,
+    or facts that are not stated or clearly implied in the comments."""
 
     question = dspy.InputField(desc="the user's question about viewer opinions")
-    context = dspy.InputField(desc="YouTube comments from viewers — these are the source of truth")
-    answer = dspy.OutputField(desc="a direct answer summarizing what the comment authors express, grounded only in the provided comments")
+    context = dspy.InputField(desc="YouTube comments from real viewers")
+    answer = dspy.OutputField(desc="2-3 sentence answer grounded in comment wording and themes")
 
 
 class getSummary(dspy.Signature):

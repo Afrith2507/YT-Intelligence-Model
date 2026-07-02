@@ -41,9 +41,27 @@ extractive response instead of crashing, so the rest of the agent
 import os
 import json
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _bootstrap_env() -> None:
+    """Load .env from project root so Groq works even without start.ps1."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_PROJECT_ROOT / ".env", override=False)
+    except ImportError:
+        pass
+    # Defaults when launched via streamlit run directly
+    os.environ.setdefault("RAG_GEN_MODEL", "groq/llama-3.1-8b-instant")
+    os.environ.setdefault("RAG_EMBED_BACKEND", "sentence-transformers")
+
+
+_bootstrap_env()
 
 import numpy as np
 import pandas as pd
@@ -54,35 +72,98 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from src.rag.prompts import getAnswer, getSummary, getHyDE, getInsight, getIntent
 
 # --------------------------------------------------------------------------
-# Config -- override any of these with environment variables, no code edits
-# needed to point this at a real local Ollama instance.
+# Config -- override with environment variables / .env
 # --------------------------------------------------------------------------
 OLLAMA_API_BASE = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
-GEN_MODEL = os.environ.get("RAG_GEN_MODEL", "ollama/hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M")
-EMBED_BACKEND = os.environ.get("RAG_EMBED_BACKEND", "tfidf")  # "tfidf" or "ollama"
 OLLAMA_EMBED_MODEL = os.environ.get("RAG_EMBED_MODEL", "embeddinggemma")
-DEFAULT_DATA_PATH = os.environ.get("ENRICHED_CSV_PATH", "data/processed/comments_enriched.csv")
+DEFAULT_DATA_PATH = os.environ.get(
+    "ENRICHED_CSV_PATH",
+    str(_PROJECT_ROOT / "data" / "processed" / "comments_enriched.csv"),
+)
 
-# LM is created lazily so importing this module never fails when Ollama is offline.
+
+def _gen_model() -> str:
+    explicit = os.environ.get("RAG_GEN_MODEL", "").strip()
+    if explicit:
+        return explicit
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return "groq/llama-3.1-8b-instant"
+    return "ollama/hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M"
+
+
+def _embed_backend() -> str:
+    return os.environ.get("RAG_EMBED_BACKEND", "sentence-transformers")
+
+
+# LM is created lazily so importing this module never fails when offline.
 _lm = None
 _LM_WARNED = False
+_LAST_LM_ERROR: str | None = None
+
+
+def llm_status() -> dict:
+    """Status dict for dashboard sidebar."""
+    _bootstrap_env()
+    key = os.environ.get("GROQ_API_KEY", "").strip()
+    model = _gen_model()
+    if model.startswith("groq/") and not key:
+        return {
+            "ok": False,
+            "model": model,
+            "message": "Add GROQ_API_KEY to .env in the project folder, then restart.",
+        }
+    lm = _get_lm()
+    if lm is None:
+        return {
+            "ok": False,
+            "model": model,
+            "message": _LAST_LM_ERROR or "Could not connect to the language model.",
+        }
+    return {"ok": True, "model": model, "message": "Groq connected"}
 
 
 def _get_lm():
     """Return the DSPy LM, creating it on first use. Returns None if unavailable."""
-    global _lm, _LM_WARNED
+    global _lm, _LM_WARNED, _LAST_LM_ERROR
     if _lm is not None:
         return _lm
+
+    _bootstrap_env()
+    model = _gen_model()
+
     try:
-        _lm = dspy.LM(GEN_MODEL, api_base=OLLAMA_API_BASE, api_key=None, temperature=0.9)
+        is_groq = model.startswith("groq/")
+        is_ollama = model.startswith("ollama")
+
+        api_key = None
+        api_base = None
+
+        if is_groq:
+            api_key = os.environ.get("GROQ_API_KEY", "").strip()
+            if not api_key:
+                _LAST_LM_ERROR = "GROQ_API_KEY is missing from .env"
+                if not _LM_WARNED:
+                    print(f"[generator] {_LAST_LM_ERROR}")
+                    _LM_WARNED = True
+                return None
+            os.environ["GROQ_API_KEY"] = api_key
+        elif is_ollama:
+            api_base = OLLAMA_API_BASE
+
+        kwargs: dict = dict(temperature=0.3)
+        if api_base:
+            kwargs["api_base"] = api_base
+        if api_key:
+            kwargs["api_key"] = api_key
+
+        _lm = dspy.LM(model, **kwargs)
+        print(f"[generator] LM initialised: {model}")
+        _LAST_LM_ERROR = None
         return _lm
     except Exception as exc:
+        _LAST_LM_ERROR = str(exc)
         if not _LM_WARNED:
-            print(
-                f"[generator] could not initialise local LM ({exc}); "
-                f"generation will use extractive fallbacks. "
-                f"Start Ollama at {OLLAMA_API_BASE} with model {GEN_MODEL} for real answers."
-            )
+            print(f"[generator] could not initialise LM ({exc})")
             _LM_WARNED = True
         return None
 
@@ -103,14 +184,18 @@ def _predict_safe(predictor, output_field, fallback_value, **kwargs):
             result = predictor(**kwargs)
         return getattr(result, output_field)
     except Exception as exc:
+        _LAST_LM_ERROR = str(exc)
         if not _LM_WARNED:
-            print(
-                f"[generator] local LM unavailable ({exc}); using a simple "
-                f"fallback response instead. Start Ollama at {OLLAMA_API_BASE} "
-                f"with model {GEN_MODEL} to get real generations."
-            )
+            print(f"[generator] generation failed ({exc})")
             _LM_WARNED = True
         return fallback_value
+
+
+def _llm_fallback_prefix() -> str:
+    st = llm_status()
+    if not st["ok"]:
+        return f"⚠ {st['message']}\n\nShowing retrieved comments instead:\n\n"
+    return "⚠ Generation failed. Showing retrieved comments instead:\n\n"
 
 
 def _extractive_fallback(text, max_chars=280):
@@ -153,7 +238,7 @@ def _extractive_answer(question: str, results: list) -> str:
     quotes = "\n".join(quote_lines)
 
     return (
-        f"⚠ Local LLM unavailable — showing an extractive answer instead.\n\n"
+        f"{_llm_fallback_prefix()}"
         f"{sentiment_line}\n\n"
         f"Most representative comments:\n{quotes}"
     )
@@ -225,7 +310,9 @@ class OllamaEmbeddingsBackend:
         return np.array(self._embedder.embed_documents(texts), dtype="float32")
 
 
-def _make_embedder(kind=EMBED_BACKEND):
+def _make_embedder(kind=None):
+    if kind is None:
+        kind = _embed_backend()
     if kind == "ollama":
         return OllamaEmbeddingsBackend()
     if kind == "sentence-transformers":
@@ -251,6 +338,17 @@ class CommentVectorStore:
         faiss.normalize_L2(vectors)
         self.index = faiss.IndexFlatIP(vectors.shape[1])
         self.index.add(vectors)
+        self._build_bm25(texts)
+
+    def _build_bm25(self, texts: list[str]) -> None:
+        from rank_bm25 import BM25Okapi
+        self._corpus_tokens = [t.lower().split() for t in texts]
+        self._bm25 = BM25Okapi(self._corpus_tokens)
+
+    def _ensure_bm25(self) -> None:
+        if getattr(self, "_bm25", None) is None:
+            texts = self.df[self.text_col].astype(str).tolist()
+            self._build_bm25(texts)
 
     def _to_results(self, idxs, scores):
         results = []
@@ -322,6 +420,51 @@ class CommentVectorStore:
         hypothetical = generate_hypothetical_answer(query)
         return self.similarity_search(hypothetical, k=k)
 
+    def bm25_search(self, query, k=4):
+        """Lexical BM25 over comment text (professor Task 6 lexical leg)."""
+        self._ensure_bm25()
+        tokenized = query.lower().split()
+        scores = self._bm25.get_scores(tokenized)
+        top_idx = np.argsort(scores)[::-1][: min(k, len(scores))]
+        return self._to_results(top_idx, scores[top_idx])
+
+    def hybrid_search(self, query, k=4, fetch_k=20, alpha=0.5):
+        """BM25 + FAISS semantic fused with Reciprocal Rank Fusion (Task 6)."""
+        fetch_k = min(fetch_k, len(self.df))
+        semantic = self.similarity_search(query, k=fetch_k)
+        lexical  = self.bm25_search(query, k=fetch_k)
+
+        rrf_scores: dict[str, float] = {}
+        by_id: dict[str, dict] = {}
+
+        for rank, row in enumerate(semantic):
+            cid = str(row["comment_id"])
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + alpha * (1.0 / (rank + 60))
+            by_id[cid] = row
+
+        for rank, row in enumerate(lexical):
+            cid = str(row["comment_id"])
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 - alpha) * (1.0 / (rank + 60))
+            by_id.setdefault(cid, row)
+
+        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+        return [by_id[cid] for cid, _ in ranked]
+
+
+RETRIEVAL_MODES = {
+    "hybrid":     "hybrid_search",
+    "mmr":        "mmr_search",
+    "similarity": "similarity_search",
+    "bm25":       "bm25_search",
+    "hyde":       "hyde_search",
+}
+
+
+def _search(store: CommentVectorStore, mode: str, query: str, k: int) -> list:
+    fn_name = RETRIEVAL_MODES.get(mode, "mmr_search")
+    fn = getattr(store, fn_name)
+    return fn(query, k=k)
+
 
 _vector_store_cache = {}
 
@@ -330,13 +473,56 @@ def load_comments(path=DEFAULT_DATA_PATH):
     return pd.read_csv(path)
 
 
-def get_vector_store(path=DEFAULT_DATA_PATH, embedder_kind=EMBED_BACKEND):
-    """Build (or reuse a cached) vector store for the given CSV path."""
+def _index_cache_path(csv_path: str, embedder_kind: str) -> str:
+    """Return a deterministic path for the persisted FAISS + metadata cache."""
+    import hashlib
+    key = f"{csv_path}:{embedder_kind}"
+    h   = hashlib.md5(key.encode()).hexdigest()[:10]
+    cache_dir = os.path.join(os.path.dirname(csv_path), ".vector_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"store_{h}.pkl")
+
+
+def get_vector_store(path=DEFAULT_DATA_PATH, embedder_kind=None):
+    if embedder_kind is None:
+        embedder_kind = _embed_backend()
+    """Build (or reuse a cached) vector store for the given CSV path.
+
+    On first call the embeddings are computed and the FAISS index is saved to
+    data/processed/.vector_cache/ so subsequent runs (including dashboard
+    restarts) skip re-encoding the entire dataset and load in ~1 second.
+    """
+    import pickle
+
     key = (path, embedder_kind)
-    if key not in _vector_store_cache:
-        df = load_comments(path)
-        _vector_store_cache[key] = CommentVectorStore(df, embedder=_make_embedder(embedder_kind))
-    return _vector_store_cache[key]
+    if key in _vector_store_cache:
+        return _vector_store_cache[key]
+
+    cache_file = _index_cache_path(path, embedder_kind)
+
+    if os.path.isfile(cache_file):
+        print(f"[generator] loading cached vector store from {cache_file} …")
+        try:
+            with open(cache_file, "rb") as f:
+                store = pickle.load(f)
+            _vector_store_cache[key] = store
+            return store
+        except Exception as e:
+            print(f"[generator] cache load failed ({e}), rebuilding …")
+
+    print(f"[generator] building vector store (first run, this takes a minute) …")
+    df    = load_comments(path)
+    store = CommentVectorStore(df, embedder=_make_embedder(embedder_kind))
+
+    try:
+        with open(cache_file, "wb") as f:
+            pickle.dump(store, f)
+        print(f"[generator] vector store cached to {cache_file}")
+    except Exception as e:
+        print(f"[generator] could not save cache ({e}), continuing without cache.")
+
+    _vector_store_cache[key] = store
+    return store
 
 
 # --------------------------------------------------------------------------
@@ -384,15 +570,31 @@ def _format_context(results):
     return "\n".join(f"[{r['comment_id']}] {r['text']}" for r in results)
 
 
-def answer_with_context(question, k=4, retrieval="mmr", path=DEFAULT_DATA_PATH):
-    """End-to-end QA: retrieve relevant comments, concatenate as context
-    (same as `context="".join(docs[1])` in 7_Generator.py, just joined with
-    citation tags instead of raw concatenation), then generate an answer."""
+def _rerank_results(question: str, results: list, top_k: int) -> list:
+    """Rerank retrieved comment dicts using a cross-encoder. Returns top_k."""
+    try:
+        from sentence_transformers import CrossEncoder
+        _RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        if not hasattr(_rerank_results, "_model"):
+            print(f"[reranker] loading {_RERANK_MODEL} …")
+            _rerank_results._model = CrossEncoder(_RERANK_MODEL)
+        pairs  = [[question, r["text"]] for r in results]
+        scores = _rerank_results._model.predict(pairs)
+        ranked = sorted(zip(results, scores), key=lambda x: x[1], reverse=True)
+        return [r for r, _ in ranked[:top_k]]
+    except Exception as e:
+        print(f"[reranker] skipped ({e})")
+        return results[:top_k]
+
+
+def answer_with_context(question, k=4, retrieval="hybrid", path=DEFAULT_DATA_PATH):
+    """End-to-end QA: retrieve -> rerank -> generate answer."""
     store = get_vector_store(path)
-    search_fn = {"mmr": store.mmr_search, "similarity": store.similarity_search, "hyde": store.hyde_search}[retrieval]
-    results = search_fn(question, k=k)
+    fetch_k = min(k * 3, 20)
+    results = _search(store, retrieval, question, k=fetch_k)
+    results = _rerank_results(question, results, top_k=k)
     context = _format_context(results)
-    answer = generate_answer(question, context, results=results)
+    answer  = generate_answer(question, context, results=results)
     return {"answer": answer, "citations": [r["comment_id"] for r in results], "retrieved": results}
 
 
@@ -401,7 +603,7 @@ def answer_with_summarized_context(question, k=4, path=DEFAULT_DATA_PATH):
     comments first, then answer using the summary as context instead of the
     raw concatenated text."""
     store = get_vector_store(path)
-    results = store.mmr_search(question, k=k)
+    results = _search(store, "mmr", question, k=k)
     raw_context = _format_context(results)
     summary = generate_summary(raw_context)
     answer = generate_answer(question, summary, results=results)
@@ -412,7 +614,7 @@ def summarize_query(query, k=6, path=DEFAULT_DATA_PATH):
     """Used by the agent's 'summarize' intent: retrieve comments relevant to
     the query/topic and summarize them."""
     store = get_vector_store(path)
-    results = store.mmr_search(query, k=k)
+    results = _search(store, "hybrid", query, k=k)
     raw_context = _format_context(results)
     summary = generate_summary(raw_context)
     return {"summary": summary, "citations": [r["comment_id"] for r in results], "retrieved": results}

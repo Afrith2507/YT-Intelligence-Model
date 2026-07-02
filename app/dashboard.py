@@ -1,164 +1,61 @@
 """
-app/dashboard.py  —  Ryan Trahan YouTube Intelligence Engine
+app/dashboard.py  —  Youtube Comments Intelligence
 Run:  python -m streamlit run app/dashboard.py
 """
 from __future__ import annotations
 import sys, os, json, ast, traceback as _tb
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env", override=False)
+except ImportError:
+    pass
+
+os.environ.setdefault("RAG_GEN_MODEL", "groq/llama-3.1-8b-instant")
+os.environ.setdefault("RAG_EMBED_BACKEND", "sentence-transformers")
 
 import streamlit as st
 
 st.set_page_config(
-    page_title="YT Intelligence · Ryan Trahan",
+    page_title="Youtube Comments Intelligence",
     page_icon="▶",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Scoped CSS — never touches Streamlit internals ────────────────────────────
-st.markdown("""
-<style>
-/* ── Base font ── */
-html, body, [class*="css"] {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont,
-                 "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+# ── Theme (light / dark) ───────────────────────────────────────────────────────
+if "ui_theme" not in st.session_state:
+    st.session_state.ui_theme = "Light"
+
+_THEMES = {
+    "Light": {
+        "bg": "#FAFAFA", "surface": "#FFFFFF", "surface2": "#F4F4F5",
+        "text": "#111111", "muted": "#71717A", "border": "#E4E4E7",
+        "accent": "#111111", "grid": "rgba(0,0,0,0.06)",
+        "hover_bg": "#FFFFFF", "hover_border": "#D4D4D8",
+        "pie_line": "#FFFFFF", "chart_seq": ["#F4F4F5", "#D4D4D8", "#A1A1AA", "#52525B", "#18181B"],
+        "heatmap": ["#F4F4F5", "#18181B"],
+        "btn_bg": "#111111", "btn_fg": "#FFFFFF",
+        "input_bg": "#FFFFFF", "placeholder": "#A1A1AA",
+    },
+    "Dark": {
+        "bg": "#0A0A0A", "surface": "#141414", "surface2": "#1C1C1C",
+        "text": "#F5F5F5", "muted": "#A3A3A3", "border": "#262626",
+        "accent": "#F5F5F5", "grid": "rgba(255,255,255,0.06)",
+        "hover_bg": "#1C1C1C", "hover_border": "#404040",
+        "pie_line": "#0A0A0A", "chart_seq": ["#262626", "#404040", "#525252", "#737373", "#A3A3A3"],
+        "heatmap": ["#141414", "#F5F5F5"],
+        "btn_bg": "#F5F5F5", "btn_fg": "#0A0A0A",
+        "input_bg": "#1C1C1C", "placeholder": "#737373",
+    },
 }
 
-/* ── Hero ── */
-.hero {
-    background: linear-gradient(135deg, #13141a 0%, #0a0b0e 50%, #15102a 100%);
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 16px;
-    padding: 30px 36px 26px;
-    margin-bottom: 28px;
-    position: relative;
-    overflow: hidden;
-}
-.hero::after {
-    content: '';
-    position: absolute;
-    top: -100px; right: -80px;
-    width: 360px; height: 360px;
-    background: radial-gradient(circle, rgba(124,58,237,.1) 0%, transparent 70%);
-    pointer-events: none;
-}
-.hero-eyebrow {
-    font-size: 0.6rem; font-weight: 700;
-    letter-spacing: .14em; text-transform: uppercase;
-    color: #7C3AED; margin-bottom: 10px;
-}
-.hero-title {
-    font-size: 1.75rem; font-weight: 700; letter-spacing: -0.035em;
-    color: #f0f0f5; margin: 0 0 6px; line-height: 1.15;
-}
-.hero-sub { font-size: 0.82rem; color: #44474f; margin: 0; }
-.hero-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
-.hero-tag {
-    font-size: 0.66rem; color: #44474f;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.07);
-    padding: 3px 10px; border-radius: 6px; letter-spacing: .03em;
-}
-
-/* ── Section label ── */
-.sec {
-    font-size: 0.58rem; font-weight: 700;
-    letter-spacing: .13em; text-transform: uppercase;
-    color: #44474f; margin: 24px 0 12px;
-    display: flex; align-items: center; gap: 10px;
-}
-.sec::after {
-    content: ''; flex: 1; height: 1px;
-    background: rgba(255,255,255,0.05);
-}
-
-/* ── KPI grid ── */
-.kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 4px; }
-.kpi {
-    background: #111318;
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px;
-    padding: 20px 22px 16px;
-}
-.kpi-accent { height: 2px; border-radius: 2px; margin-bottom: 16px; }
-.kpi-label {
-    font-size: 0.58rem; font-weight: 700;
-    letter-spacing: .13em; text-transform: uppercase;
-    color: #44474f; margin-bottom: 8px;
-}
-.kpi-value {
-    font-size: 2.1rem; font-weight: 700; letter-spacing: -0.045em;
-    color: #f0f0f5; line-height: 1;
-}
-.kpi-sub { font-size: 0.7rem; color: #2c2f38; margin-top: 6px; }
-
-/* ── AI response cards ── */
-.ai-answer {
-    background: #0e140e;
-    border: 1px solid rgba(50,215,75,.12);
-    border-left: 3px solid #30d158;
-    border-radius: 12px;
-    padding: 18px 22px;
-    font-size: 0.88rem; line-height: 1.78;
-    color: #a8c8ac; white-space: pre-line;
-    margin: 10px 0 4px;
-}
-.ai-answer.fallback {
-    background: #14110a;
-    border-left-color: #ff9f0a;
-    color: #c0a870;
-}
-.ai-summary {
-    background: #0d1018;
-    border: 1px solid rgba(94,130,255,.12);
-    border-left: 3px solid #5e82ff;
-    border-radius: 12px;
-    padding: 18px 22px;
-    font-size: 0.88rem; line-height: 1.78;
-    color: #a0b0d0; white-space: pre-line;
-    margin: 10px 0 4px;
-}
-.ai-summary.fallback {
-    background: #14110a;
-    border-left-color: #ff9f0a;
-    color: #c0a870;
-}
-
-/* ── Intent pill ── */
-.intent-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(124,58,237,.08);
-    border: 1px solid rgba(124,58,237,.18);
-    color: #7C3AED; font-size: 0.6rem; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase;
-    padding: 3px 10px; border-radius: 99px; margin: 4px 0 14px;
-}
-
-/* ── Comment card ── */
-.ccard {
-    background: #111318;
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 10px;
-    padding: 12px 16px; margin-bottom: 8px;
-}
-.ccard-meta {
-    font-size: 0.58rem; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase;
-    color: #2e3240; margin-bottom: 6px;
-    display: flex; align-items: center; gap: 8px;
-}
-.ccard-dot { width: 6px; height: 6px; border-radius: 99px; flex-shrink: 0; }
-.ccard-text { font-size: 0.84rem; color: #7a8090; line-height: 1.65; }
-
-/* ── Retrieval lab strategy header ── */
-.strat-title {
-    font-size: 0.65rem; font-weight: 700;
-    letter-spacing: .1em; text-transform: uppercase;
-    padding-bottom: 10px; margin-bottom: 12px;
-    border-bottom: 2px solid currentColor;
-}
-</style>
-""", unsafe_allow_html=True)
+def _t() -> dict:
+    return _THEMES[st.session_state.ui_theme]
 
 # ── Optional imports ───────────────────────────────────────────────────────────
 try:
@@ -181,51 +78,54 @@ _FONT = ("system-ui,-apple-system,BlinkMacSystemFont,"
          "'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif")
 
 _SENT_COLOR = {
-    "positive": "#30d158",
-    "negative": "#ff453a",
-    "neutral":  "#636366",
+    "positive": "#22C55E",
+    "negative": "#EF4444",
+    "neutral":  "#A1A1AA",
 }
 
-# Base Plotly layout applied to every chart
-# NOTE: margin is intentionally excluded — each chart sets its own to avoid
-# duplicate-keyword errors when charts also pass margin explicitly.
-_CT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor ="rgba(0,0,0,0)",
-    font=dict(color="#44474f", family=_FONT, size=11),
-    hoverlabel=dict(
-        bgcolor="#1a1c24",
-        bordercolor="rgba(255,255,255,0.08)",
-        font=dict(color="#e8e8f0", family=_FONT, size=12),
-    ),
-)
-_M  = dict(t=16, b=16, l=16, r=16)   # default margin
-_MB = dict(t=16, b=70, l=16, r=16)   # margin with room for angled x-axis labels
+_M  = dict(t=16, b=16, l=16, r=16)
 
-# Purple sequential for single-variable charts
-_PURPLE_SEQ = ["#1e1040", "#3b1a7a", "#5e2fbf", "#7C3AED", "#a78bfa"]
-_BLUE_SEQ   = ["#0a1030", "#1a3070", "#2a50c0", "#5e82ff", "#99b4ff"]
-_GREEN_SEQ  = ["#061a0a", "#0e3a18", "#1a6030", "#30d158", "#86efac"]
-_AMBER_SEQ  = ["#1a0e00", "#3a2000", "#7a4500", "#ff9f0a", "#fcd34d"]
+
+def _ct() -> dict:
+    t = _t()
+    return dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=t["muted"], family=_FONT, size=11),
+        hoverlabel=dict(
+            bgcolor=t["surface"],
+            bordercolor=t["border"],
+            font=dict(color=t["text"], family=_FONT, size=12),
+        ),
+    )
 
 
 def _ax(title: str | None = None, angle: int | None = None,
         reversed: bool = False, size: int = 11) -> dict:
+    t = _t()
     d: dict = dict(
-        gridcolor="rgba(255,255,255,0.04)",
-        linecolor="rgba(255,255,255,0.04)",
-        tickfont=dict(size=size, color="#44474f"),
+        gridcolor=t["grid"],
+        linecolor=t["border"],
+        tickfont=dict(size=size, color=t["muted"]),
         zeroline=False,
     )
-    if title:   d["title"] = dict(text=title, font=dict(size=11, color="#44474f"))
-    if angle is not None: d["tickangle"] = angle
-    if reversed: d["autorange"] = "reversed"
+    if title:
+        d["title"] = dict(text=title, font=dict(size=11, color=t["muted"]))
+    if angle is not None:
+        d["tickangle"] = angle
+    if reversed:
+        d["autorange"] = "reversed"
     return d
 
 
-def _chart(fig, height: int = 280) -> None:
-    fig.update_layout(**_CT, height=height, margin=_M)
-    st.plotly_chart(fig, use_container_width=True)
+def _chart_seq() -> list:
+    return _t()["chart_seq"]
+
+
+def _colorscale() -> list:
+    seq = _chart_seq()
+    n = max(len(seq) - 1, 1)
+    return [[i / n, c] for i, c in enumerate(seq)]
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -271,7 +171,7 @@ def _get_orchestrator(path: str):
 
 
 def _dot(sentiment: str) -> str:
-    return {"positive": "#30d158", "negative": "#ff453a", "neutral": "#636366"}.get(sentiment, "#636366")
+    return _SENT_COLOR.get(sentiment, _t()["muted"])
 
 
 def _comment_card(row) -> None:
@@ -318,47 +218,54 @@ if PANDAS:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### ▶ YT Intelligence")
-    st.caption("Ryan Trahan · CSCI370 Spring 2026")
+    st.markdown('<p class="nav-brand">Youtube Comments Intelligence</p>', unsafe_allow_html=True)
+    st.caption("Ryan Trahan · CSCI370")
     st.divider()
 
-    st.markdown("**Retrieval**")
-    top_k     = st.slider("Top-k results", 1, 10, 4, key="sidebar_k")
-    retrieval = st.selectbox("Strategy", ["mmr", "similarity", "hyde"], key="sidebar_strat")
+    st.radio(
+        "Appearance",
+        ["Light", "Dark"],
+        horizontal=True,
+        key="ui_theme",
+    )
 
     st.divider()
-    st.markdown("**System**")
-
-    def _status(ok: bool, label: str) -> None:
-        st.markdown(f"{'🟢' if ok else '🔴'} {label}")
-
-    _status(PANDAS,  "pandas")
-    _status(PLOTLY,  "plotly")
-    _status(data_ok, "data loaded")
-
-    try:    import faiss;  _status(True,  "faiss-cpu")
-    except: _status(False, "faiss-cpu")
-
-    try:    import dspy;   _status(True,  "dspy")
-    except: _status(False, "dspy")
-
+    st.markdown("**LLM**")
     try:
-        import requests as _r
-        _status(_r.get("http://localhost:11434", timeout=1).ok, "Ollama")
-    except:
-        _status(False, "Ollama (offline)")
+        from src.rag.generator import llm_status
+        _llm = llm_status()
+        if _llm["ok"]:
+            st.success(_llm["message"])
+            st.caption(_llm["model"])
+        else:
+            st.error(_llm["message"])
+            groq_in = st.text_input("Groq API key", type="password", key="groq_key_input")
+            if groq_in.strip() and st.button("Save key to .env", key="save_groq"):
+                env_path = _ROOT / ".env"
+                lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+                lines = [ln for ln in lines if not ln.startswith("GROQ_API_KEY=")]
+                lines.append(f"GROQ_API_KEY={groq_in.strip()}")
+                env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                os.environ["GROQ_API_KEY"] = groq_in.strip()
+                st.success("Saved. Refresh the page (R).")
+    except Exception as _e:
+        st.caption(f"LLM status unavailable: {_e}")
+
+    st.divider()
+    st.markdown("**Retrieval**")
+    top_k     = st.slider("Top-k results", 1, 10, 8, key="sidebar_k")
+    retrieval = st.selectbox(
+        "Strategy",
+        ["hybrid", "mmr", "similarity", "bm25", "hyde"],
+        key="sidebar_strat",
+    )
 
     if data_ok:
         st.divider()
-        st.markdown("**Dataset**")
-        st.caption(f"{len(df):,} comments")
-        if "sentiment" in df.columns:
-            vc = df["sentiment"].value_counts()
-            for s, c in vc.items():
-                st.caption(f"{_dot(s).replace('#','')} {s}: {c:,}")
+        st.caption(f"{len(df):,} comments loaded")
 
     st.divider()
-    custom_path = st.text_input("CSV path", value=_csv_path, key="csv_path_input")
+    custom_path = st.text_input("Data path", value=_csv_path, key="csv_path_input")
     if custom_path != _csv_path:
         try:
             df = load_data(custom_path)
@@ -368,31 +275,414 @@ with st.sidebar:
         except Exception as e:
             st.error(str(e))
 
-# ── Hero ───────────────────────────────────────────────────────────────────────
+def _inject_css() -> None:
+    t0 = _t()
+    st.markdown(f"""
+<style>
+:root {{
+  --bg: {t0['bg']};
+  --surface: {t0['surface']};
+  --surface2: {t0['surface2']};
+  --text: {t0['text']};
+  --muted: {t0['muted']};
+  --border: {t0['border']};
+  --accent: {t0['accent']};
+  --grid: {t0['grid']};
+  --btn-bg: {t0['btn_bg']};
+  --btn-fg: {t0['btn_fg']};
+  --input-bg: {t0['input_bg']};
+  --placeholder: {t0['placeholder']};
+  --radius: 24px;
+  --radius-sm: 14px;
+  --radius-pill: 999px;
+  /* Streamlit native theme tokens */
+  --background-color: {t0['bg']};
+  --secondary-background-color: {t0['surface']};
+  --text-color: {t0['text']};
+  --primary-color: {t0['accent']};
+}}
+
+/* ── Streamlit app shell (light + dark) ── */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] > section.main,
+[data-testid="stAppViewContainer"] .block-container {{
+  background-color: var(--bg) !important;
+  color: var(--text) !important;
+}}
+[data-testid="stHeader"] {{
+  background-color: var(--bg) !important;
+  border-bottom: 1px solid var(--border);
+}}
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div:first-child {{
+  background-color: var(--surface) !important;
+  border-right: 1px solid var(--border);
+}}
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {{
+  color: var(--text) !important;
+}}
+[data-testid="stSidebar"] hr {{
+  border-color: var(--border) !important;
+}}
+
+/* Widget labels (sidebar + main) */
+label[data-testid="stWidgetLabel"],
+.stTextInput label, .stTextArea label, .stSelectbox label,
+.stSlider label, .stRadio label, .stNumberInput label {{
+  color: var(--text) !important;
+}}
+.stRadio label span,
+.stRadio [data-baseweb="radio"] label,
+.stRadio [data-baseweb="radio"] div,
+.stRadio [data-baseweb="radio"] span {{
+  color: var(--text) !important;
+}}
+.stRadio [data-baseweb="radio"] svg {{
+  fill: var(--text) !important;
+}}
+
+/* Main content typography */
+.block-container h1, .block-container h2, .block-container h3,
+.block-container h4, .block-container h5, .block-container h6,
+.block-container p, .block-container label,
+.block-container [data-testid="stMarkdownContainer"] {{
+  color: var(--text) !important;
+}}
+.block-container .stCaption,
+.block-container [data-testid="stMarkdownContainer"] p {{
+  color: var(--muted) !important;
+}}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {{
+  background: transparent !important;
+  border-bottom: 1px solid var(--border) !important;
+  gap: 8px;
+}}
+.stTabs [data-baseweb="tab"] {{
+  color: var(--muted) !important;
+  background: transparent !important;
+  border-radius: var(--radius-pill) !important;
+  padding: 8px 16px !important;
+}}
+.stTabs [data-baseweb="tab"][aria-selected="true"] {{
+  color: var(--text) !important;
+  background: var(--surface2) !important;
+  border-bottom: none !important;
+}}
+.stTabs [data-baseweb="tab-highlight"] {{
+  background: transparent !important;
+}}
+
+/* Inputs & widgets */
+.stTextInput input,
+.stTextInput textarea,
+.stNumberInput input,
+div[data-baseweb="select"] > div,
+div[data-baseweb="input"] > div {{
+  background-color: var(--input-bg) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+  -webkit-text-fill-color: var(--text) !important;
+}}
+.stTextInput input::placeholder,
+.stTextInput textarea::placeholder {{
+  color: var(--placeholder) !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: var(--placeholder) !important;
+}}
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div {{
+  color: var(--text) !important;
+}}
+.stSlider [data-baseweb="slider"] div,
+.stSlider [data-testid="stTickBarMin"],
+.stSlider [data-testid="stTickBarMax"],
+.stSlider [data-testid="stMarkdownContainer"] p {{
+  color: var(--text) !important;
+}}
+.stSlider [data-baseweb="slider"] [role="slider"] {{
+  background: var(--text) !important;
+}}
+
+/* Buttons — override Streamlit primary white-on-white in dark mode */
+.stApp div[data-testid="stButton"] > button {{
+  border-radius: var(--radius-pill) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+  padding: 0.55rem 1.4rem !important;
+}}
+.stApp div[data-testid="stButton"] > button[kind="primary"],
+.stApp div[data-testid="stButton"] > button[data-testid="baseButton-primary"] {{
+  background-color: var(--btn-bg) !important;
+  color: var(--btn-fg) !important;
+  border: 1px solid var(--btn-bg) !important;
+}}
+.stApp div[data-testid="stButton"] > button[kind="primary"] *,
+.stApp div[data-testid="stButton"] > button[data-testid="baseButton-primary"] * {{
+  color: var(--btn-fg) !important;
+  fill: var(--btn-fg) !important;
+}}
+.stApp div[data-testid="stButton"] > button[kind="secondary"],
+.stApp div[data-testid="stButton"] > button[data-testid="baseButton-secondary"] {{
+  background-color: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}}
+.stApp div[data-testid="stButton"] > button[kind="secondary"] * {{
+  color: var(--text) !important;
+}}
+
+/* Alerts */
+[data-testid="stAlert"] {{
+  border-radius: var(--radius-sm) !important;
+}}
+[data-testid="stAlert"] p, [data-testid="stAlert"] div {{
+  color: var(--text) !important;
+}}
+
+/* Metrics, expanders, dataframe */
+[data-testid="stMetric"] {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+}}
+[data-testid="stMetricLabel"] {{ color: var(--muted) !important; }}
+[data-testid="stMetricValue"] {{ color: var(--text) !important; }}
+[data-testid="stExpander"] {{
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+}}
+[data-testid="stExpander"] summary {{
+  color: var(--text) !important;
+}}
+[data-testid="stDataFrame"] {{
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}}
+
+div[data-testid="column"] {{
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+}}
+div[data-testid="stPlotlyChart"] {{
+  flex: 1 1 auto;
+  min-height: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 8px 0;
+  margin-bottom: 12px;
+}}
+
+.top-nav {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 4px 22px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}}
+.nav-brand {{
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}}
+.nav-meta {{
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}}
+
+.hero {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px 44px 36px;
+  margin-bottom: 28px;
+}}
+.hero-eyebrow {{
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 12px;
+}}
+.hero-title {{
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--text);
+  margin: 0 0 10px;
+  line-height: 1.12;
+  max-width: 16ch;
+}}
+.hero-sub {{
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin: 0 0 20px;
+  max-width: 52ch;
+  line-height: 1.6;
+}}
+.hero-pills {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.hero-pill {{
+  font-size: 0.68rem;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.02em;
+}}
+
+.sec {{
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 28px 0 14px;
+}}
+
+.kpi-grid {{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 8px;
+}}
+@media (max-width: 900px) {{
+  .kpi-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+}}
+.kpi {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 22px 24px 18px;
+}}
+.kpi-label {{
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}}
+.kpi-value {{
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--text);
+  line-height: 1;
+}}
+.kpi-sub {{ font-size: 0.72rem; color: var(--muted); margin-top: 8px; }}
+
+.ai-answer, .ai-summary {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 20px 24px;
+  font-size: 0.9rem;
+  line-height: 1.75;
+  color: var(--text);
+  white-space: pre-line;
+  margin: 12px 0 6px;
+}}
+.ai-answer.fallback, .ai-summary.fallback {{
+  border-color: var(--border);
+  color: var(--muted);
+}}
+
+.intent-pill {{
+  display: inline-block;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  margin: 4px 0 14px;
+}}
+
+.ccard {{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  margin-bottom: 10px;
+}}
+.ccard-meta {{
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.ccard-dot {{ width: 6px; height: 6px; border-radius: 99px; flex-shrink: 0; }}
+.ccard-text {{ font-size: 0.86rem; color: var(--text); line-height: 1.65; opacity: 0.88; }}
+
+.strat-title {{
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}}
+</style>
+""", unsafe_allow_html=True)
+
+_inject_css()
+
+# ── Top nav + hero ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="top-nav">
+  <div class="nav-brand">Youtube Comments Intelligence</div>
+  <div class="nav-meta">CSCI370 · Spring 2026</div>
+</div>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <div class="hero">
-  <div class="hero-eyebrow">CSCI370 · Spring 2026 · NLP + RAG</div>
-  <div class="hero-title">Ryan Trahan Intelligence Engine</div>
-  <div class="hero-sub">End-to-end YouTube comment analysis — sentiment, topics, entities, and source-grounded AI answers</div>
-  <div class="hero-tags">
-    <span class="hero-tag">VADER + RoBERTa</span>
-    <span class="hero-tag">spaCy NER</span>
-    <span class="hero-tag">KeyBERT + YAKE</span>
-    <span class="hero-tag">BERTopic</span>
-    <span class="hero-tag">FAISS + BM25</span>
-    <span class="hero-tag">MMR · HyDE · Hybrid</span>
-    <span class="hero-tag">DSPy</span>
-    <span class="hero-tag">MLflow</span>
+  <div class="hero-eyebrow">Youtube Comments Intelligence</div>
+  <div class="hero-title">Youtuber audience analytics</div>
+  <div class="hero-sub">Sentiment, topics, entities, and source-grounded answers from Ryan Trahan comment data.</div>
+  <div class="hero-pills">
+    <span class="hero-pill">Sentiment</span>
+    <span class="hero-pill">Topics</span>
+    <span class="hero-pill">NER</span>
+    <span class="hero-pill">RAG</span>
+    <span class="hero-pill">Evaluation</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 tab_analytics, tab_qa, tab_summary, tab_lab = st.tabs([
-    "📊  Analytics",
-    "💬  Ask AI",
-    "📝  Summarize",
-    "🔬  Retrieval Lab",
+    "Analytics",
+    "Ask",
+    "Summarize",
+    "Retrieval Lab",
 ])
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -424,25 +714,21 @@ with tab_analytics:
     st.markdown(f"""
     <div class="kpi-grid">
       <div class="kpi">
-        <div class="kpi-accent" style="background:#7C3AED;"></div>
         <div class="kpi-label">Total Comments</div>
         <div class="kpi-value">{n:,}</div>
         <div class="kpi-sub">Ryan Trahan dataset</div>
       </div>
       <div class="kpi">
-        <div class="kpi-accent" style="background:#30d158;"></div>
         <div class="kpi-label">Positive</div>
         <div class="kpi-value">{pos:,}</div>
         <div class="kpi-sub">{pos/n:.1%} of total</div>
       </div>
       <div class="kpi">
-        <div class="kpi-accent" style="background:#ff453a;"></div>
         <div class="kpi-label">Negative</div>
         <div class="kpi-value">{neg:,}</div>
         <div class="kpi-sub">{neg/n:.1%} of total</div>
       </div>
       <div class="kpi">
-        <div class="kpi-accent" style="background:#636366;"></div>
         <div class="kpi-label">Neutral</div>
         <div class="kpi-value">{neu:,}</div>
         <div class="kpi-sub">{neu/n:.1%} of total</div>
@@ -458,26 +744,27 @@ with tab_analytics:
         c1, c2 = st.columns(2)
 
         with c1:
+            t = _t()
             fig = go.Figure(go.Pie(
                 labels=svc.index.tolist(),
                 values=svc.values.tolist(),
                 hole=0.68,
                 marker=dict(
-                    colors=[_SENT_COLOR.get(s, "#636366") for s in svc.index],
-                    line=dict(color="#0a0b0e", width=5),
+                    colors=[_SENT_COLOR.get(s, t["muted"]) for s in svc.index],
+                    line=dict(color=t["pie_line"], width=4),
                 ),
                 textinfo="label+percent",
-                textfont=dict(size=12, color="#8a8d98"),
+                textfont=dict(size=12, color=t["muted"]),
                 hovertemplate="%{label}: %{value:,}<extra></extra>",
             ))
             fig.update_layout(
-                **_CT,
+                **_ct(),
                 height=270,
                 margin=_M,
                 showlegend=False,
                 annotations=[dict(
                     text=f"<b>{n:,}</b>",
-                    x=0.5, y=0.5, font=dict(size=18, color="#f0f0f5"),
+                    x=0.5, y=0.5, font=dict(size=18, color=t["text"]),
                     showarrow=False,
                 )],
             )
@@ -493,13 +780,13 @@ with tab_analytics:
                         orientation="h",
                         marker=dict(
                             color=tc.values.tolist(),
-                            colorscale=_PURPLE_SEQ,
+                            colorscale=_colorscale(),
                             line=dict(width=0),
                         ),
                         hovertemplate="%{y}: %{x:,}<extra></extra>",
                     ))
                     fig.update_layout(
-                        **_CT, height=270, margin=_M,
+                        **_ct(), height=270, margin=_M,
                         xaxis=_ax("Comments"),
                         yaxis=_ax(reversed=True),
                         coloraxis_showscale=False,
@@ -525,14 +812,14 @@ with tab_analytics:
                 )
                 fig.update_traces(marker_line_width=0)
                 fig.update_layout(
-                    **_CT, height=310,
+                    **_ct(), height=310,
                     margin=dict(t=16, b=70, l=16, r=16),
                     xaxis=_ax(angle=-35, size=10),
                     yaxis=_ax("Comments"),
                     legend=dict(
                         orientation="h", y=1.08, x=0,
                         bgcolor="rgba(0,0,0,0)",
-                        font=dict(size=11, color="#44474f"),
+                        font=dict(size=11, color=_t()["muted"]),
                     ),
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -551,13 +838,13 @@ with tab_analytics:
                     x=list(ev), y=list(el), orientation="h",
                     marker=dict(
                         color=list(ev),
-                        colorscale=_AMBER_SEQ,
+                        colorscale=_colorscale(),
                         line=dict(width=0),
                     ),
                     hovertemplate="%{y}: %{x:,}<extra></extra>",
                 ))
                 fig.update_layout(
-                    **_CT, height=310, margin=_M,
+                    **_ct(), height=310, margin=_M,
                     xaxis=_ax("Mentions"),
                     yaxis=_ax(reversed=True),
                 )
@@ -579,13 +866,13 @@ with tab_analytics:
                     x=list(kv), y=list(kl), orientation="h",
                     marker=dict(
                         color=list(kv),
-                        colorscale=_GREEN_SEQ,
+                        colorscale=_colorscale(),
                         line=dict(width=0),
                     ),
                     hovertemplate="%{y}: %{x:,}<extra></extra>",
                 ))
                 fig.update_layout(
-                    **_CT, height=330, margin=_M,
+                    **_ct(), height=330, margin=_M,
                     xaxis=_ax("Frequency"),
                     yaxis=_ax(reversed=True),
                 )
@@ -597,30 +884,40 @@ with tab_analytics:
             if "topic_label_sentiment" in dft.columns:
                 sl  = dft["topic_label_sentiment"].astype(str).str.lower()
                 ds  = dft[~sl.str.startswith("-1") & ~sl.str.contains("outlier")]
+                if ds.empty and "topic_label" in dft.columns:
+                    # Per-sentiment BERTopic often marks short YouTube comments as
+                    # outliers (-1). Fall back to overall topics split by sentiment.
+                    tl = dft["topic_label"].astype(str).str.lower()
+                    ds = dft[~tl.str.startswith("-1") & ~tl.str.contains("outlier")]
+                    topic_col = "topic_label"
+                    st.caption("Per-sentiment topics were mostly outliers — showing overall topics by sentiment instead.")
+                else:
+                    topic_col = "topic_label_sentiment"
+
                 if not ds.empty:
-                    stc = (ds.groupby(["sentiment", "topic_label_sentiment"])
+                    stc = (ds.groupby(["sentiment", topic_col])
                              .size().reset_index(name="count"))
                     fig = px.bar(
-                        stc, x="topic_label_sentiment", y="count",
+                        stc, x=topic_col, y="count",
                         color="sentiment", color_discrete_map=_SENT_COLOR,
                         barmode="group",
-                        labels={"topic_label_sentiment": "", "count": "Comments", "sentiment": ""},
+                        labels={topic_col: "", "count": "Comments", "sentiment": ""},
                     )
                     fig.update_traces(marker_line_width=0)
                     fig.update_layout(
-                        **_CT, height=330,
+                        **_ct(), height=330,
                         margin=dict(t=16, b=70, l=16, r=16),
                         xaxis=_ax(angle=-35, size=10),
                         yaxis=_ax("Comments"),
                         legend=dict(
                             orientation="h", y=1.08, x=0,
                             bgcolor="rgba(0,0,0,0)",
-                            font=dict(size=11, color="#44474f"),
+                            font=dict(size=11, color=_t()["muted"]),
                         ),
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("No sentiment-specific topic data.")
+                    st.info("No topic data available — re-run BERTopic with src/pipeline/run_full_pipeline.py")
             else:
                 st.info("`topic_label_sentiment` column not found.")
 
@@ -633,17 +930,43 @@ with tab_analytics:
     # ── Evaluation ──
     st.divider()
     st.markdown('<div class="sec">MLflow Evaluation</div>', unsafe_allow_html=True)
-    st.caption("Start MLflow with `python -m mlflow server --port 5000` before running.")
+    st.caption("Fast mode (~1-3 min): skips BERTScore. First run may be slower while the vector index loads.")
+
     if st.button("Run evaluation", type="primary", key="eval_btn"):
-        with st.spinner("Running evaluation pipeline …"):
+        with st.spinner("Running evaluation (retrieval + Groq answers + metrics) …"):
             try:
                 from src.evaluation.run_eval import run_full_evaluation
-                run_full_evaluation(path=_csv_path, use_mock=True)
-                st.success("Done — [open MLflow dashboard](http://localhost:5000)")
+                results = run_full_evaluation(
+                    path=_csv_path,
+                    use_mock=not data_ok,
+                    fast=True,
+                )
+                st.session_state["eval_results"] = results
+                st.success("Evaluation complete.")
             except Exception as e:
                 st.error(str(e))
                 with st.expander("Traceback"):
                     st.code(_tb.format_exc())
+
+    if "eval_results" in st.session_state:
+        res = st.session_state["eval_results"]
+        st.markdown(f"**Run label:** `{res.get('label', 'eval')}`")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Retrieval metrics**")
+            for k, v in sorted(res.get("retrieval", {}).items()):
+                st.metric(k.replace("_", " ").title(), f"{v:.3f}")
+        with c2:
+            st.markdown("**Generation metrics**")
+            for k, v in sorted(res.get("generation", {}).items()):
+                st.metric(k.replace("_", " ").title(), f"{v:.3f}")
+
+        with st.expander("Sample Q/A from evaluation"):
+            for q, a in zip(res.get("queries", []), res.get("hypotheses", [])):
+                st.markdown(f"**Q:** {q}")
+                st.markdown(f"**A:** {a}")
+                st.divider()
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -651,7 +974,7 @@ with tab_analytics:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_qa:
     st.markdown("#### Ask a question about the comments")
-    st.caption("Intent classifier → MMR retrieval → DSPy answer generation")
+    st.caption("Intent classifier -> hybrid/MMR retrieval -> DSPy answer generation")
 
     q_input = st.text_input(
         "Question",
@@ -684,6 +1007,7 @@ with tab_qa:
                             ctx = " ".join(cited["text"].astype(str).tolist())
                             score = faithfulness_score(resp["answer"], ctx)
                             st.metric("Answer faithfulness", f"{score:.1%}")
+                            st.caption("How well the answer matches retrieved comments (wording + meaning).")
                         except Exception:
                             pass
 
@@ -735,6 +1059,7 @@ with tab_summary:
                             ctx = " ".join(cited["text"].astype(str).tolist())
                             score = faithfulness_score(resp["answer"], ctx)
                             st.metric("Summary faithfulness", f"{score:.1%}")
+                            st.caption("How well the summary matches retrieved comments (wording + meaning).")
                         except Exception:
                             pass
 
@@ -749,7 +1074,7 @@ with tab_summary:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_lab:
     st.markdown("#### Retrieval Strategy Comparison")
-    st.caption("Run the same query through MMR, Similarity, and HyDE side-by-side")
+    st.caption("Compare hybrid (BM25+FAISS RRF), MMR, BM25, similarity, and HyDE side-by-side")
 
     lab_q = st.text_input(
         "Query",
@@ -761,28 +1086,30 @@ with tab_lab:
         if not data_ok:
             st.error("No data loaded.")
         else:
-            with st.spinner("Running all three retrieval strategies …"):
+            with st.spinner("Running retrieval strategies …"):
                 try:
-                    from src.rag.generator import get_vector_store
+                    from src.rag.generator import get_vector_store, _search
 
                     store = get_vector_store(_csv_path)
                     strategies = {
-                        "MMR":        (store.mmr_search,        "#7C3AED"),
-                        "Similarity": (store.similarity_search, "#5e82ff"),
-                        "HyDE":       (store.hyde_search,       "#ff9f0a"),
+                        "Hybrid":     "hybrid",
+                        "BM25":       "bm25",
+                        "MMR":        "mmr",
+                        "Similarity": "similarity",
+                        "HyDE":       "hyde",
                     }
 
                     results: dict[str, list] = {}
-                    for name, (fn, _) in strategies.items():
-                        results[name] = fn(lab_q, k=top_k)
+                    for name, mode in strategies.items():
+                        results[name] = _search(store, mode, lab_q, k=top_k)
 
                     # Side-by-side columns
                     st.markdown('<div class="sec">Results</div>', unsafe_allow_html=True)
-                    cols = st.columns(3)
-                    for col, (name, (_, color)) in zip(cols, strategies.items()):
+                    cols = st.columns(5)
+                    for col, name in zip(cols, strategies):
                         with col:
                             st.markdown(
-                                f'<div class="strat-title" style="color:{color};">{name}</div>',
+                                f'<div class="strat-title">{name}</div>',
                                 unsafe_allow_html=True,
                             )
                             for doc in results[name]:
@@ -811,22 +1138,22 @@ with tab_lab:
                             )
                             fig = px.imshow(
                                 ov.astype(int).T,
-                                color_continuous_scale=["#111318", "#7C3AED"],
+                                color_continuous_scale=_t()["heatmap"],
                                 aspect="auto",
                                 labels={"x": "Comment", "y": "Strategy", "color": "Retrieved"},
                             )
                             fig.update_layout(
-                                **_CT, height=140, margin=_M,
+                                **_ct(), height=140, margin=_M,
                                 coloraxis_showscale=False,
                             )
                             st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Purple = retrieved   ·   shared columns = consensus between strategies")
+                            st.caption("Dark = retrieved · shared columns = consensus between strategies")
 
                     # Per-strategy faithfulness
                     st.markdown('<div class="sec">Query Coverage</div>', unsafe_allow_html=True)
                     try:
                         from src.evaluation.generation_eval import faithfulness_score
-                        mc = st.columns(3)
+                        mc = st.columns(5)
                         for col, (name, docs) in zip(mc, results.items()):
                             if docs:
                                 ctx   = " ".join(d["text"] for d in docs)
