@@ -18,21 +18,38 @@ from dataclasses import dataclass, field
 # ── Result container ───────────────────────────────────────────────────────────
 
 @dataclass
+class QueryScore:
+    query: str
+    hypothesis: str
+    rouge_l: float
+    bert_f1: float
+    bert_f1_gold: float
+    faithfulness: float
+
+
+@dataclass
 class GenerationResult:
-    rouge_l:       float = 0.0
+    rouge_l:        float = 0.0
     bert_precision: float = 0.0
     bert_recall:    float = 0.0
     bert_f1:        float = 0.0
+    bert_f1_gold:   float = 0.0
     faithfulness:   float = 0.0
-    # flat dict for MLflow logging
+    bertscore_error: str | None = None
+    bertscore_used_fallback: bool = False
+    per_query:      list[QueryScore] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, float]:
-        return {
+        out = {
             "rouge_l":        self.rouge_l,
             "bert_precision": self.bert_precision,
             "bert_recall":    self.bert_recall,
             "bert_f1":        self.bert_f1,
             "faithfulness":   self.faithfulness,
         }
+        if self.bert_f1_gold > 0:
+            out["bert_f1_gold"] = self.bert_f1_gold
+        return out
 
 
 # ── ROUGE-L ────────────────────────────────────────────────────────────────────
@@ -74,12 +91,31 @@ def batch_rouge_l(hypotheses: list[str], references: list[str]) -> float:
 
 # ── BERTScore ─────────────────────────────────────────────────────────────────
 
+def reference_from_context(context: str, max_chars: int = 450) -> str:
+    """
+    Build an extractive reference from retrieved comments for BERTScore.
+    RAG answers should align with this evidence summary when generation is good.
+    """
+    lines: list[str] = []
+    for raw in context.split("\n"):
+        line = re.sub(r"^\[[^\]]+\]\s*", "", raw.strip())
+        if len(line) > 15:
+            lines.append(line)
+    if not lines:
+        return context.strip()[:max_chars]
+    # Prefer longer, more informative comments as the semantic reference
+    unique = sorted(set(lines), key=len, reverse=True)[:3]
+    ref = " ".join(unique)
+    return ref[:max_chars]
+
+
 def bert_score_eval(
     hypotheses: list[str],
     references: list[str],
     model_type: str = "distilbert-base-uncased",
     device: str = "cpu",
-) -> tuple[float, float, float]:
+    rescale: bool = True,
+) -> tuple[float, float, float, list[float], str | None]:
     """
     Compute BERTScore (P, R, F1) averaged over all pairs.
 
@@ -90,25 +126,71 @@ def bert_score_eval(
     device : str
         "cpu" or "cuda".
 
-    Returns
-    -------
-    tuple[float, float, float]
-        (mean_precision, mean_recall, mean_f1)
+    Returns (mean_p, mean_r, mean_f1, per_item_f1, error_message).
+    error_message is None on success.
     """
+    hyps = [h.strip() for h in hypotheses]
+    refs = [r.strip() for r in references]
+    if not hyps or not refs:
+        return 0.0, 0.0, 0.0, [0.0] * len(hyps), "empty hypotheses or references"
+
     try:
         from bert_score import score as bert_score_fn
     except ImportError:
-        print("[WARNING] bert-score not installed. Run: pip install bert-score")
-        return 0.0, 0.0, 0.0
+        msg = "bert-score not installed — run: pip install bert-score"
+        print(f"[WARNING] {msg}")
+        return *_semantic_fallback(hyps, refs), msg
 
-    P, R, F1 = bert_score_fn(
-        cands=hypotheses,
-        refs=references,
-        model_type=model_type,
-        device=device,
-        verbose=False,
-    )
-    return P.mean().item(), R.mean().item(), F1.mean().item()
+    models_to_try = [model_type]
+    if model_type != "distilbert-base-uncased":
+        models_to_try.append("distilbert-base-uncased")
+
+    last_err = ""
+    for model in models_to_try:
+        for use_rescale in (rescale, False):
+            try:
+                P, R, F1 = bert_score_fn(
+                    cands=hyps,
+                    refs=refs,
+                    model_type=model,
+                    lang="en",
+                    device=device,
+                    verbose=False,
+                    rescale_with_baseline=use_rescale,
+                )
+                f1_list = [float(x) for x in F1.tolist()]
+                if any(x > 0 for x in f1_list):
+                    return P.mean().item(), R.mean().item(), F1.mean().item(), f1_list, None
+            except Exception as exc:
+                last_err = f"{model} (rescale={use_rescale}): {exc}"
+                print(f"[WARNING] BERTScore failed — {last_err}")
+
+    msg = last_err or "BERTScore returned all zeros"
+    print(f"[WARNING] {msg} — using semantic similarity fallback")
+    return *_semantic_fallback(hyps, refs), msg
+
+
+def _semantic_fallback(
+    hypotheses: list[str],
+    references: list[str],
+) -> tuple[float, float, float, list[float]]:
+    """MiniLM cosine similarity when bert-score package/model fails."""
+    try:
+        from sentence_transformers import SentenceTransformer
+        import numpy as np
+    except ImportError:
+        return 0.0, 0.0, 0.0, [0.0] * len(hypotheses)
+
+    if not hasattr(_semantic_fallback, "_model"):
+        _semantic_fallback._model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    model = _semantic_fallback._model
+    hyp_embs = model.encode(hypotheses, normalize_embeddings=True, show_progress_bar=False)
+    ref_embs = model.encode(references, normalize_embeddings=True, show_progress_bar=False)
+    sims = np.sum(hyp_embs * ref_embs, axis=1)
+    f1_list = [float(max(0.0, min(1.0, s))) for s in sims]
+    mean = sum(f1_list) / len(f1_list) if f1_list else 0.0
+    return mean, mean, mean, f1_list
 
 
 # ── Faithfulness ──────────────────────────────────────────────────────────────
@@ -240,9 +322,11 @@ def evaluate_generation(
     hypotheses:  list[str],
     references:  list[str],
     contexts:    list[str],
+    queries:     list[str] | None = None,
     bert_model:  str = "distilbert-base-uncased",
     device:      str = "cpu",
     skip_bert:   bool = False,
+    bert_reference_mode: str = "both",
 ) -> GenerationResult:
     """
     Run all three metrics and return a GenerationResult.
@@ -256,37 +340,98 @@ def evaluate_generation(
     contexts : list[str]
         Retrieved context chunks used to produce each answer.
     """
+    if len(hypotheses) != len(references) or len(hypotheses) != len(contexts):
+        raise ValueError("hypotheses, references, and contexts must have the same length.")
+
+    context_refs = [reference_from_context(c) for c in contexts]
+    queries = queries or [f"query_{i + 1}" for i in range(len(hypotheses))]
+
     print("[eval] Computing ROUGE-L …")
     rl = batch_rouge_l(hypotheses, references)
 
+    bp, br, bf, bf_gold = 0.0, 0.0, 0.0, 0.0
+    per_item_f1: list[float] = []
+    per_item_gold: list[float] = []
+    bert_errors: list[str] = []
+    used_fallback = False
     if skip_bert:
         print("[eval] Skipping BERTScore (fast mode)")
-        bp, br, bf = 0.0, 0.0, 0.0
     else:
-        print("[eval] Computing BERTScore …")
-        bp, br, bf = bert_score_eval(hypotheses, references, bert_model, device)
+        mode = bert_reference_mode.lower()
+        if mode in ("context", "both"):
+            print(f"[eval] Computing BERTScore vs retrieved context ({bert_model}) …")
+            bp, br, bf, per_item_f1, err = bert_score_eval(hypotheses, context_refs, bert_model, device)
+            if err:
+                bert_errors.append(err)
+                used_fallback = True
+        if mode in ("static", "gold", "both"):
+            print(f"[eval] Computing BERTScore vs gold references ({bert_model}) …")
+            _, _, bf_gold, per_item_gold, err = bert_score_eval(hypotheses, references, bert_model, device)
+            if err:
+                bert_errors.append(err)
+                used_fallback = True
+            if mode in ("static", "gold"):
+                bp, br, bf, per_item_f1 = _, _, bf_gold, per_item_gold
 
     print("[eval] Computing faithfulness …")
-    faith = batch_faithfulness(hypotheses, contexts)
+    per_query: list[QueryScore] = []
+    faith_scores: list[float] = []
+    for i, (q, hyp, ref, ctx) in enumerate(zip(queries, hypotheses, references, contexts)):
+        rouge = rouge_l_score(hyp, ref)
+        faith = faithfulness_score(hyp, ctx)
+        faith_scores.append(faith)
+        b_f1 = per_item_f1[i] if i < len(per_item_f1) else 0.0
+        b_gold = per_item_gold[i] if i < len(per_item_gold) else 0.0
+        per_query.append(QueryScore(
+            query=q,
+            hypothesis=hyp,
+            rouge_l=rouge,
+            bert_f1=b_f1,
+            bert_f1_gold=b_gold,
+            faithfulness=faith,
+        ))
+
+    faith = sum(faith_scores) / len(faith_scores) if faith_scores else 0.0
 
     result = GenerationResult(
         rouge_l        = rl,
         bert_precision = bp,
         bert_recall    = br,
         bert_f1        = bf,
+        bert_f1_gold   = bf_gold,
         faithfulness   = faith,
+        bertscore_error = "; ".join(dict.fromkeys(bert_errors)) if bert_errors else None,
+        bertscore_used_fallback = used_fallback,
+        per_query      = per_query,
     )
-    _print_results(result)
+    _print_results(result, skip_bert=skip_bert, bert_reference_mode=bert_reference_mode)
     return result
 
 
-def _print_results(r: GenerationResult) -> None:
+def _print_results(
+    r: GenerationResult,
+    skip_bert: bool = False,
+    bert_reference_mode: str = "both",
+) -> None:
     print("\n── Generation Evaluation Results ─────────────────────")
     print(f"  ROUGE-L        {r.rouge_l:.4f}")
-    print(f"  BERTScore P    {r.bert_precision:.4f}")
-    print(f"  BERTScore R    {r.bert_recall:.4f}")
-    print(f"  BERTScore F1   {r.bert_f1:.4f}")
+    if not skip_bert:
+        if bert_reference_mode.lower() in ("context", "both"):
+            print(f"  BERTScore P    {r.bert_precision:.4f}  (vs retrieved context)")
+            print(f"  BERTScore R    {r.bert_recall:.4f}")
+            print(f"  BERTScore F1   {r.bert_f1:.4f}")
+        if bert_reference_mode.lower() in ("static", "gold", "both") and r.bert_f1_gold > 0:
+            print(f"  BERTScore F1*  {r.bert_f1_gold:.4f}  (vs gold reference)")
     print(f"  Faithfulness   {r.faithfulness:.4f}")
+    if r.per_query:
+        print("\n  Per-query breakdown:")
+        for row in r.per_query:
+            line = f"    • {row.query[:60]}…  R-L={row.rouge_l:.2f}  faith={row.faithfulness:.2f}"
+            if not skip_bert:
+                line += f"  BERT={row.bert_f1:.2f}"
+                if row.bert_f1_gold > 0:
+                    line += f"  BERT(gold)={row.bert_f1_gold:.2f}"
+            print(line)
     print("──────────────────────────────────────────────────────\n")
 
 

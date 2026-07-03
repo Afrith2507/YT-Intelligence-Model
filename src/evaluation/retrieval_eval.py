@@ -97,14 +97,13 @@ def evaluate_retriever(
     n          = len(queries)
 
     for query, relevant in zip(queries, ground_truth):
-        retrieved = [str(d) for d in retrieve_fn(query, max_k)]
-        rel       = {str(d) for d in relevant}
+        retrieved = retrieve_fn(query, max_k)
 
-        mrr_sum += reciprocal_rank(retrieved, rel)
+        mrr_sum += reciprocal_rank(retrieved, relevant)
 
         for k in k_values:
-            hit_sums[k]  += hit_at_k(retrieved, rel, k)
-            ndcg_sums[k] += ndcg_at_k(retrieved, rel, k)
+            hit_sums[k]  += hit_at_k(retrieved, relevant, k)
+            ndcg_sums[k] += ndcg_at_k(retrieved, relevant, k)
 
     results: dict[str, float] = {"mrr": mrr_sum / n}
     for k in k_values:
