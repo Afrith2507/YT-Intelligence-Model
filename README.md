@@ -1,4 +1,4 @@
-# YouTube Intelligence Engine — Ryan Trahan Audience Analytics
+# YouTube Intelligence Engine 
 
 **CSCI370 Group Project | Spring 2026**
 
