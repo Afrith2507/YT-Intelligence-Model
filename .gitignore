@@ -1,5 +1,5 @@
-# Secrets
-.env
+# Secrets — .env is tracked so professor/teammates can run the demo without manual key sharing
+# .env
 .env.local
 *.pem
 
