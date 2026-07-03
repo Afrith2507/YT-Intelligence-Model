@@ -3,7 +3,7 @@
 #   .\start.ps1 -Check       run dependency + smoke tests first
 #   .\start.ps1 -Install     pip install then start
 #
-# First-time: copy .env.example to .env and add GROQ_API_KEY
+# First-time: .env is included in the repo for grader demo (Groq LLM ready after clone)
 
 param(
     [switch]$Check,
@@ -30,8 +30,13 @@ function Load-DotEnv {
 $venv = Join-Path $ProjectRoot ".venv\Scripts\Activate.ps1"
 if (Test-Path $venv) { . $venv }
 
-# config
-Load-DotEnv (Join-Path $ProjectRoot ".env")
+# config — .env is committed for professor/grader (LLM works after clone)
+$envPath = Join-Path $ProjectRoot ".env"
+if (-not (Test-Path $envPath)) {
+    $example = Join-Path $ProjectRoot ".env.example"
+    if (Test-Path $example) { Copy-Item $example $envPath }
+}
+Load-DotEnv $envPath
 $env:KMP_DUPLICATE_LIB_OK = "TRUE"
 $env:RAG_GEN_MODEL = "groq/llama-3.1-8b-instant"
 $env:RAG_EMBED_BACKEND = "sentence-transformers"

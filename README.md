@@ -24,15 +24,12 @@ End-to-end NLP and RAG system for Ryan Trahan YouTube comments. The pipeline scr
 - Python 3.10+
 - Git
 - PowerShell (Windows launcher)
-- API keys in `.env`:
-  - `GROQ_API_KEY` (required for Ask / Summarize)
-  - `YOUTUBE_API_KEY` (required only for scraping)
 
-**Dataset:** `data/processed/comments_enriched.csv` is required locally to run the dashboard. Data files are excluded from Git (see `.gitignore`). Share datasets within the team outside GitHub.
+**Included in repo:** `.env` (Groq + YouTube keys), CSV datasets under `data/`, enriched comments at `data/processed/comments_enriched.csv`. No extra key setup needed for grading demo.
 
 ---
 
-## Quick Start
+## Quick Start (Professor / Grader)
 
 ```powershell
 git clone https://github.com/Afrith2507/YT-Intelligence-Model.git
@@ -42,23 +39,17 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 python install.py
-copy .env.example .env
-```
-
-Edit `.env` and add your API keys. Place `comments_enriched.csv` in `data/processed/` (or run the enrichment pipeline below).
-
-```powershell
 .\start.ps1
 ```
 
-Open http://localhost:8501
+Open http://localhost:8501 — use the **Ask** tab to test the LLM (Groq). Keys load automatically from `.env` in the repo.
 
 Optional:
 
 ```powershell
 .\start.ps1 -Install    # pip install then start
 .\start.ps1 -Check      # dependency + smoke tests first
-python src/evaluation/run_eval.py
+python src/evaluation/run_eval.py --bertscore
 ```
 
 ---
