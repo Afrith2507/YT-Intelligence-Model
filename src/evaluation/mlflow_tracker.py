@@ -9,15 +9,86 @@ Run MLflow server first:
 Then visit: http://localhost:5000
 """
 
+import os
+from pathlib import Path
+
+# Allow legacy file store if user explicitly sets a file:// URI via env
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+
 import mlflow
 import dspy
 from datetime import datetime
 
 
 # ── Configuration ──────────────────────────────────────────────────────────────
+# Default: local SQLite (no server, works on Windows, no file-store deprecation).
+# Override with MLFLOW_TRACKING_URI=http://localhost:5000 for the MLflow UI server.
 
-MLFLOW_URI       = "http://localhost:5000"
-EXPERIMENT_NAME  = f"generation_{datetime.now().strftime('%d%m%Y')}"   # e.g. generation_08062026
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_DB   = _PROJECT_ROOT / "mlflow.db"
+_RAW_URI      = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+EXPERIMENT_NAME = f"generation_{datetime.now().strftime('%d%m%Y')}"
+
+
+def _sqlite_uri(path: Path) -> str:
+    return f"sqlite:///{path.resolve().as_posix()}"
+
+
+def _resolve_mlflow_uri(raw: str) -> str:
+    """
+    Normalize tracking URIs. Bare Windows paths become file:/// URIs;
+    empty env uses a project-local SQLite database.
+    """
+    if not raw:
+        return _sqlite_uri(_DEFAULT_DB)
+
+    if raw.startswith(("http://", "https://", "file:", "sqlite:",
+                       "postgresql:", "mysql:", "mssql:", "databricks")):
+        return raw
+
+    path = Path(raw)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve().as_uri()
+
+
+MLFLOW_URI = _resolve_mlflow_uri(_RAW_URI)
+
+
+def _upgrade_mlflow_schema(uri: str) -> None:
+    """Auto-migrate SQLite MLflow DB when package version outpaces schema."""
+    if not uri.startswith("sqlite:"):
+        return
+    import subprocess
+    import sys
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "mlflow", "db", "upgrade", uri],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode == 0:
+            print("[MLflow] Database schema upgraded/verified")
+            return
+        print(f"[MLflow] db upgrade returned {proc.returncode}: {out.strip()}")
+    except Exception as exc:
+        print(f"[MLflow] db upgrade failed ({exc})")
+
+    # Last resort: back up stale DB and start fresh (metrics only, no model artifacts)
+    db_path = uri.replace("sqlite:///", "")
+    if os.path.isfile(db_path):
+        backup = f"{db_path}.bak"
+        try:
+            if os.path.isfile(backup):
+                os.remove(backup)
+            os.replace(db_path, backup)
+            print(f"[MLflow] Reset stale database -> {backup}")
+        except Exception as exc:
+            print(f"[MLflow] could not reset database ({exc})")
 
 
 def setup_mlflow(framework: str = "dspy") -> None:
@@ -30,11 +101,22 @@ def setup_mlflow(framework: str = "dspy") -> None:
         One of "dspy" | "langchain" | "openai".
         Matches the professor's Task 10 options exactly.
     """
+    _upgrade_mlflow_schema(MLFLOW_URI)
     mlflow.set_tracking_uri(MLFLOW_URI)
+    if MLFLOW_URI.startswith("sqlite:"):
+        # SQLite tracking — no separate model registry needed for metric logging
+        pass
+    else:
+        try:
+            mlflow.set_registry_uri(MLFLOW_URI)
+        except Exception:
+            pass
     mlflow.set_experiment(EXPERIMENT_NAME)
 
+    # Skip dspy autolog — it calls dspy.configure() and breaks Streamlit threads.
+    # Manual metric logging via log_retrieval_metrics / log_generation_metrics is enough.
     if framework == "dspy":
-        mlflow.dspy.autolog()           # professor's exact instruction
+        print("[MLflow] dspy autolog disabled (Streamlit-safe mode)")
     elif framework == "langchain":
         mlflow.langchain.autolog()
     elif framework == "openai":

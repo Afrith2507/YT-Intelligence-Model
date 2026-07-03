@@ -930,42 +930,16 @@ with tab_analytics:
     # ── Evaluation ──
     st.divider()
     st.markdown('<div class="sec">MLflow Evaluation</div>', unsafe_allow_html=True)
-    st.caption(
-        "Fast mode skips BERTScore (~1-3 min). Enable BERTScore for full generation "
-        "metrics your professor expects (~3-8 min on CPU, first run downloads roberta-base)."
-    )
-
-    eval_col1, eval_col2 = st.columns(2)
-    with eval_col1:
-        include_bert = st.checkbox("Include BERTScore", value=False, key="eval_bertscore")
-    with eval_col2:
-        bert_ref_mode = st.selectbox(
-            "BERTScore reference",
-            ["both", "context", "gold"],
-            format_func=lambda x: {
-                "both": "Both (context + gold)",
-                "context": "Retrieved comments (recommended)",
-                "gold": "Gold reference answers",
-            }[x],
-            key="eval_bert_ref",
-            disabled=not include_bert,
-        )
+    st.caption("Fast mode (~1-3 min): skips BERTScore. First run may be slower while the vector index loads.")
 
     if st.button("Run evaluation", type="primary", key="eval_btn"):
-        spinner_msg = (
-            "Running full evaluation (retrieval + Groq answers + BERTScore) …"
-            if include_bert else
-            "Running evaluation (retrieval + Groq answers + metrics) …"
-        )
-        with st.spinner(spinner_msg):
+        with st.spinner("Running evaluation (retrieval + Groq answers + metrics) …"):
             try:
                 from src.evaluation.run_eval import run_full_evaluation
                 results = run_full_evaluation(
                     path=_csv_path,
                     use_mock=not data_ok,
-                    fast=not include_bert,
-                    include_bertscore=include_bert,
-                    bert_reference_mode=bert_ref_mode,
+                    fast=True,
                 )
                 st.session_state["eval_results"] = results
                 st.success("Evaluation complete.")
@@ -977,25 +951,6 @@ with tab_analytics:
     if "eval_results" in st.session_state:
         res = st.session_state["eval_results"]
         st.markdown(f"**Run label:** `{res.get('label', 'eval')}`")
-        if res.get("include_bertscore"):
-            st.caption(
-                f"BERTScore mode: **{res.get('bert_reference_mode', 'both')}** | "
-                f"model: **distilbert-base-uncased**"
-            )
-            if res.get("bertscore_used_fallback"):
-                st.warning(
-                    "BERTScore package/model failed — showing **semantic similarity fallback** "
-                    "(MiniLM cosine). Install/fix with: `pip install bert-score`"
-                )
-                if res.get("bertscore_error"):
-                    st.caption(f"Details: {res['bertscore_error']}")
-            elif res.get("generation", {}).get("bert_f1", 0) == 0:
-                st.warning(
-                    "BERTScore ran but returned 0. Run in terminal: "
-                    "`pip install bert-score` then re-run evaluation."
-                )
-        else:
-            st.caption("BERTScore was skipped (fast mode). Re-run with **Include BERTScore** checked.")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -1005,20 +960,7 @@ with tab_analytics:
         with c2:
             st.markdown("**Generation metrics**")
             for k, v in sorted(res.get("generation", {}).items()):
-                label = k.replace("_", " ").title()
-                if k == "bert_f1":
-                    label = "BERTScore F1 (context)"
-                elif k == "bert_f1_gold":
-                    label = "BERTScore F1 (gold)"
-                st.metric(label, f"{v:.3f}")
-
-        per_query = res.get("per_query", [])
-        if per_query:
-            with st.expander("Per-query breakdown (for report / professor)"):
-                import pandas as pd
-                pq_df = pd.DataFrame(per_query)
-                show_cols = [c for c in pq_df.columns if c != "hypothesis"]
-                st.dataframe(pq_df[show_cols], use_container_width=True, hide_index=True)
+                st.metric(k.replace("_", " ").title(), f"{v:.3f}")
 
         with st.expander("Sample Q/A from evaluation"):
             for q, a in zip(res.get("queries", []), res.get("hypotheses", [])):

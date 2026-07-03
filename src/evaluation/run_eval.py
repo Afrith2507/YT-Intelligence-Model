@@ -154,8 +154,6 @@ def run_full_evaluation(
     use_mock: bool = False,
     vectorstore_name: str | None = None,
     fast: bool = True,
-    include_bertscore: bool | None = None,
-    bert_reference_mode: str = "both",
 ) -> dict:
     """
     Run retrieval + generation evaluation and log to MLflow.
@@ -169,15 +167,9 @@ def run_full_evaluation(
         If True, use the simple mock retrieve/generate/context functions
         instead of the real FAISS pipeline. Useful for smoke-testing
         without a data file.
-    fast : bool
-        If True, skip BERTScore for a quicker run (~1-3 min).
-    include_bertscore : bool | None
-        Explicit override for BERTScore. When None, uses ``not fast``.
-    bert_reference_mode : str
-        ``context`` (vs retrieved comments), ``gold`` (vs static refs), or ``both``.
+    vectorstore_name : str | None
+        Label used in MLflow run names (defaults to "faiss" or "mock").
     """
-    if include_bertscore is None:
-        include_bertscore = not fast
     if use_mock:
         retrieve_fn = _mock_retrieve
         generate_fn = _mock_generate
@@ -231,9 +223,7 @@ def run_full_evaluation(
         hypotheses = hypotheses,
         references = REFERENCE_ANSWERS,
         contexts   = contexts,
-        queries    = EVAL_QUERIES,
-        skip_bert  = not include_bertscore,
-        bert_reference_mode = bert_reference_mode,
+        skip_bert  = fast,
     )
     log_generation_metrics(
         run_name = f"{label}_generation",
@@ -252,24 +242,9 @@ def run_full_evaluation(
         "all_metrics": all_metrics,
         "queries": EVAL_QUERIES,
         "hypotheses": hypotheses,
-        "per_query": [
-            {
-                "query": row.query,
-                "hypothesis": row.hypothesis,
-                "rouge_l": row.rouge_l,
-                "bert_f1": row.bert_f1,
-                "bert_f1_gold": row.bert_f1_gold,
-                "faithfulness": row.faithfulness,
-            }
-            for row in gen_result.per_query
-        ],
-        "bertscore_error": gen_result.bertscore_error,
-        "bertscore_used_fallback": gen_result.bertscore_used_fallback,
         "label": label,
         "ground_truth_sizes": [len(g) for g in ground_truth],
-        "fast_mode": not include_bertscore,
-        "include_bertscore": include_bertscore,
-        "bert_reference_mode": bert_reference_mode,
+        "fast_mode": fast,
     }
 
 
@@ -289,22 +264,6 @@ if __name__ == "__main__":
         "--full", action="store_true",
         help="Include BERTScore (slower, ~3-5 extra minutes on CPU).",
     )
-    parser.add_argument(
-        "--bertscore", action="store_true",
-        help="Alias for --full: run BERTScore evaluation.",
-    )
-    parser.add_argument(
-        "--bert-ref", default="both",
-        choices=["context", "gold", "both"],
-        help="BERTScore reference type: context (retrieved comments), gold (static refs), or both.",
-    )
     args = parser.parse_args()
 
-    include_bert = args.full or args.bertscore
-    run_full_evaluation(
-        path=args.path,
-        use_mock=args.mock,
-        fast=not include_bert,
-        include_bertscore=include_bert,
-        bert_reference_mode=args.bert_ref,
-    )
+    run_full_evaluation(path=args.path, use_mock=args.mock, fast=not args.full)
