@@ -31,6 +31,12 @@ End-to-end NLP and RAG system for Ryan Trahan YouTube comments. The pipeline scr
 
 ## Quick Start (Professor / Grader)
 
+**Do not double-click `start.ps1`** — Windows may open it in an editor instead of running it.
+
+### Option A — PowerShell (recommended)
+
+Open **PowerShell** in the project folder, then:
+
 ```powershell
 git clone https://github.com/Afrith2507/YT-Intelligence-Model.git
 cd YT-Intelligence-Model
@@ -42,7 +48,17 @@ python install.py
 .\start.ps1
 ```
 
-Open http://localhost:8501 — use the **Ask** tab to test the LLM (Groq). Keys load automatically from `.env` in the repo.
+### Option B — Double-click (Windows)
+
+After `python install.py`, double-click **`start.bat`** in the project folder.
+
+### Option C — One Python command
+
+```powershell
+python -m streamlit run app/dashboard.py
+```
+
+Open http://localhost:8501 — use the **Ask** tab to test the LLM (Groq). Keys load from `.env` in the repo.
 
 Optional:
 

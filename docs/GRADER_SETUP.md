@@ -4,6 +4,8 @@ After clone, the LLM works without adding API keys manually.
 
 ## Steps
 
+**Important:** Run commands in **PowerShell** or **Terminal** — do not double-click `start.ps1` (it opens as a text file on some PCs).
+
 ```powershell
 git clone https://github.com/Afrith2507/YT-Intelligence-Model.git
 cd YT-Intelligence-Model
@@ -11,6 +13,14 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python install.py
 .\start.ps1
+```
+
+**Or** double-click `start.bat` after install.
+
+**Or:**
+
+```powershell
+python -m streamlit run app/dashboard.py
 ```
 
 Open http://localhost:8501
